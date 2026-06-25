@@ -1,0 +1,73 @@
+# =============================================================================
+# REPO: capture-logs-workflows
+# ARCHIVO: .github/workflows/reusable-capture-logs.yml
+#
+# PROPOSITO:
+#   Descarga artefactos de todos los jobs anteriores, consolida en
+#   final_logs.json y sube a ADLS Gen2. El upload es condicional —
+#   si no hay secrets de Azure configurados, se omite sin fallar.
+# =============================================================================
+
+on:
+  workflow_call:
+    inputs:
+      app_name:    { type: string, required: true }
+      environment: { type: string, required: true }
+      run_id:      { type: string, required: true }
+    secrets:
+      ADLS_STORAGE_ACCOUNT: { required: false }
+      AZURE_CLIENT_ID:      { required: false }
+      AZURE_CLIENT_SECRET:  { required: false }
+      AZURE_TENANT_ID:      { required: false }
+
+jobs:
+  capture-logs:
+    name: "Capture Logs — ${{ inputs.app_name }}"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout proyecto (${{ inputs.app_name }})
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # -----------------------------------------------------------------------
+      # Descargar TODOS los artefactos *-logs generados por los jobs anteriores
+      # -----------------------------------------------------------------------
+      - name: Download all job artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "*-logs"
+          path: downloaded/
+          merge-multiple: false
+
+      # -----------------------------------------------------------------------
+      # Consolidar + validar + subir — ACCION del repo capture-logs-actions
+      # Todo el proceso de consolidación y upload vive en una sola acción
+      # para que sea reutilizable en cualquier proyecto del banco.
+      # -----------------------------------------------------------------------
+      - name: Consolidate and Upload Logs
+        uses: xvr8/actions/consolidate-and-upload@main
+        with:
+          downloaded_path: downloaded/
+          app_name: ${{ inputs.app_name }}
+          environment: ${{ inputs.environment }}
+          run_id: ${{ inputs.run_id }}
+          adls_account: ${{ secrets.ADLS_STORAGE_ACCOUNT }}
+          azure_client_id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure_client_secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          azure_tenant_id: ${{ secrets.AZURE_TENANT_ID }}
+          adls_container: "lhcltools"
+          adls_base_path: "desa/bcp/lht/tntd/log"
+          output: artifacts/final_logs.json
+
+      - name: Upload final_logs as GitHub artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-consolidated-logs
+          path: artifacts/final_logs.json
+          retention-days: 30

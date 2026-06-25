@@ -1,0 +1,120 @@
+# =============================================================================
+# REPO: capture-logs-workflows
+# ARCHIVO: .github/workflows/reusable-qa-prepare.yml
+#
+# PROPOSITO:
+#   Workflow reutilizable para el job qa-prepare. Cualquier proyecto del banco
+#   puede llamar este workflow pasando sus propios inputs. La lógica de parseo
+#   y construcción del JSON viene de composite actions en capture-logs-actions.
+#
+# COMO SE LLAMA (desde demo-lhcl):
+#   jobs:
+#     qa-prepare:
+#       uses: xvr8/capture-logs-workflows/.github/workflows/reusable-qa-prepare.yml@main
+#       with:
+#         app_name: "demo-lhcl"
+#         environment: "desa"
+#         run_id: ${{ github.run_id }}
+#       secrets: inherit
+#
+# IMPORTANTE — checkout en reusable workflows:
+#   Cuando este workflow se llama desde demo-lhcl, actions/checkout@v4
+#   descarga el código de DEMO-LHCL (el repo que gatilló el pipeline).
+#   Por eso scripts/simulate_analyzer.sh es accesible — viene de demo-lhcl.
+# =============================================================================
+
+on:
+  workflow_call:
+    inputs:
+      app_name:
+        description: "Nombre de la aplicación (ej: demo-lhcl)"
+        type: string
+        required: true
+      environment:
+        description: "Ambiente de ejecución (desa/qa/prod)"
+        type: string
+        required: true
+      run_id:
+        description: "ID único del run (github.run_id del caller)"
+        type: string
+        required: true
+    outputs:
+      has_failures:
+        description: "true si hay annotations de severidad failure"
+        value: ${{ jobs.qa-prepare.outputs.has_failures }}
+
+jobs:
+  qa-prepare:
+    name: "QA Prepare — ${{ inputs.app_name }}"
+    runs-on: ubuntu-latest
+
+    outputs:
+      has_failures: ${{ steps.build-json.outputs.has_failures }}
+
+    steps:
+      # -----------------------------------------------------------------------
+      # Descarga el código de DEMO-LHCL (el repo que llamó este workflow).
+      # Esto hace disponibles los scripts/simulate_*.sh del proyecto.
+      # -----------------------------------------------------------------------
+      - name: Checkout proyecto (${{ inputs.app_name }})
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # -----------------------------------------------------------------------
+      # Ejecutar el analyzer — script ESPECIFICO del proyecto (viene de demo-lhcl)
+      # En producción reemplazar con la llamada real a Databricks.
+      # -----------------------------------------------------------------------
+      - name: Execute Analyzer
+        run: |
+          mkdir -p logs artifacts
+          bash scripts/simulate_analyzer.sh > logs/analyzer_raw.log 2>&1
+
+      # -----------------------------------------------------------------------
+      # Limpiar output del analyzer — ACCION del repo capture-logs-actions
+      # Extrae la sección "VISTA POR CATEGORIAS" del log raw.
+      # github.action_path apunta al directorio analyzer-clean/ en actions repo.
+      # -----------------------------------------------------------------------
+      - name: Clean and Parse Analyzer Output
+        uses: xvr8/actions/analyzer-clean@main
+        with:
+          input_file: logs/analyzer_raw.log
+          output_clean: logs/analyzer_clean.log
+          output_structured: artifacts/analyzer_structured.json
+          pattern: "VISTA POR CATEGORIAS"
+
+      # -----------------------------------------------------------------------
+      # Capturar logger y pyspark — scripts del proyecto
+      # -----------------------------------------------------------------------
+      - name: Capture Logger and PySpark
+        run: |
+          bash scripts/simulate_logger.sh  > logs/logger_raw.log  2>&1
+          bash scripts/simulate_pyspark.sh > logs/pyspark_raw.log 2>&1
+
+      # -----------------------------------------------------------------------
+      # Construir captured_logs.json — ACCION del repo capture-logs-actions
+      # Consolida analyzer + logger + pyspark en el esquema de annotations.
+      # -----------------------------------------------------------------------
+      - name: Build captured_logs.json
+        id: build-json
+        uses: xvr8/actions/build-captured-logs@main
+        with:
+          job_name: "qa-prepare"
+          app_name: ${{ inputs.app_name }}
+          environment: ${{ inputs.environment }}
+          run_id: ${{ inputs.run_id }}
+          analyzer_structured: artifacts/analyzer_structured.json
+          logger_log: logs/logger_raw.log
+          pyspark_log: logs/pyspark_raw.log
+          output: artifacts/captured_logs.json
+
+      - name: Upload captured_logs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-prepare-logs
+          path: artifacts/captured_logs.json
+          retention-days: 7
+          if-no-files-found: error

@@ -1,0 +1,58 @@
+# =============================================================================
+# REPO: capture-logs-workflows
+# ARCHIVO: .github/workflows/reusable-qa-xray.yml
+# =============================================================================
+
+on:
+  workflow_call:
+    inputs:
+      app_name:    { type: string, required: true }
+      environment: { type: string, required: true }
+      run_id:      { type: string, required: true }
+    outputs:
+      has_vulnerabilities:
+        value: ${{ jobs.qa-xray.outputs.has_vulnerabilities }}
+
+jobs:
+  qa-xray:
+    name: "QA Xray — ${{ inputs.app_name }}"
+    runs-on: ubuntu-latest
+
+    outputs:
+      has_vulnerabilities: ${{ steps.build-json.outputs.has_vulnerabilities }}
+
+    steps:
+      # Descarga código de demo-lhcl (el que llamó este workflow)
+      - name: Checkout proyecto (${{ inputs.app_name }})
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Script específico del proyecto — viene de demo-lhcl tras el checkout
+      - name: Run Xray Analysis
+        run: |
+          mkdir -p logs artifacts
+          bash scripts/simulate_xray.sh > logs/xray_raw.log 2>&1
+
+      # Acción reutilizable del repo capture-logs-actions
+      - name: Parse Xray and Build captured_logs.json
+        id: build-json
+        uses: xvr8/actions/xray-parse@main
+        with:
+          xray_log: logs/xray_raw.log
+          job_name: "qa-xray"
+          app_name: ${{ inputs.app_name }}
+          environment: ${{ inputs.environment }}
+          run_id: ${{ inputs.run_id }}
+          output: artifacts/captured_logs.json
+
+      - name: Upload Xray captured_logs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-xray-logs
+          path: artifacts/captured_logs.json
+          retention-days: 7
+          if-no-files-found: error
