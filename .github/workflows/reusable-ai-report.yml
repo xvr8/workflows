@@ -1,0 +1,67 @@
+# =============================================================================
+# REPO: capture-logs-workflows
+# ARCHIVO: .github/workflows/reusable-ai-report.yml
+#
+# PROPOSITO:
+#   Genera ai_report.json — un JSON limpio optimizado para consumo por IA.
+#   Extrae solo la vista por categorías del analyzer y las vulnerabilidades
+#   de Xray desde el final_logs.json consolidado.
+#
+# DEPENDE DE: que capture-logs haya subido el artefacto final-consolidated-logs.
+#
+# OUTPUT: artefacto GitHub "ai-report" con ai_report.json (retention: 30 días)
+# =============================================================================
+
+on:
+  workflow_call:
+    inputs:
+      app_name:
+        description: "Nombre de la aplicación"
+        type: string
+        required: true
+      environment:
+        description: "Ambiente (desa/qa/prod)"
+        type: string
+        required: true
+      run_id:
+        description: "ID único del run (github.run_id del caller)"
+        type: string
+        required: true
+
+jobs:
+  ai-report:
+    name: "AI Report — ${{ inputs.app_name }}"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # -----------------------------------------------------------------------
+      # Descargar el artefacto consolidado producido por capture-logs
+      # -----------------------------------------------------------------------
+      - name: Download final-consolidated-logs artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: final-consolidated-logs
+          path: artifacts/
+
+      # -----------------------------------------------------------------------
+      # Generar AI Report — ACCION del repo capture-logs-actions
+      # Extrae categories_view + vulnerabilidades → ai_report.json
+      # -----------------------------------------------------------------------
+      - name: Generate AI Report
+        uses: xvr8/actions/ai-report@main
+        with:
+          final_logs_path: artifacts/final_logs.json
+          output: artifacts/ai_report.json
+
+      - name: Upload AI Report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-report
+          path: artifacts/ai_report.json
+          retention-days: 30
